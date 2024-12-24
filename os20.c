@@ -6,111 +6,102 @@
 #include <fcntl.h>
 #include <signal.h>
 
-#define MAX_INPUT 1024
-#define MAX_ARGS 100
+#define MAX_INPUT 1024 
+#define MAX_ARGS 100   
 
-pid_t background_pids[MAX_ARGS];
-int background_count = 0;
+pid_t background_pids[MAX_ARGS];  // Arka planda çalışan işlem PID'lerini tutar
+int background_count = 0;         // Arka plan işlemi sayısını takip eder
 
+// Kullanıcıdan alınan komutu parçalara böler
 void parse_input(char *input, char **args) {
-    char *token = strtok(input, " \t\n");
+    char *token = strtok(input, " \t\n");  // Komutu boşluk ve yeni satırdan böl
     int i = 0;
 
     while (token != NULL) {
         args[i++] = token;
         token = strtok(NULL, " \t\n");
     }
-    args[i] = NULL;
+    args[i] = NULL;  // Argümanlar dizisinin sonuna NULL ekle
 }
 
+// Yönlendirme operatörlerini ("<" ve ">") kontrol eder ve uygun dosyaları açar
 void handle_redirection(char **args) {
     for (int i = 0; args[i] != NULL; i++) {
-        if (strcmp(args[i], ">") == 0) {
-            FILE *file = fopen(args[i + 1], "w");
-            if (file == NULL) {
-                perror("Error opening file");
-                exit(EXIT_FAILURE);
-            }
+        if (strcmp(args[i], ">") == 0) {  // Çıkışı bir dosyaya yönlendirme
             freopen(args[i + 1], "w", stdout);
-            args[i] = NULL;
+            args[i] = NULL;  // Yönlendirme operatörünü kaldır
         }
-        else if (strcmp(args[i], "<") == 0) {
-            FILE *file = fopen(args[i + 1], "r");
-            if (file == NULL) {
-                perror("Error opening file");
-                exit(EXIT_FAILURE);
-            }
+        else if (strcmp(args[i], "<") == 0) {  // Girişi bir dosyadan okuma
             freopen(args[i + 1], "r", stdin);
             args[i] = NULL;
         }
     }
 }
 
+// Verilen komutu çalıştırır (normal modda)
 void execute_command(char **args) {
-    pid_t pid = fork();
+    pid_t pid = fork();  // Yeni bir işlem oluştur
 
     if (pid == 0) {
-        // In child process
-        execvp(args[0], args);
+        // Çocuk işlem
+        execvp(args[0], args);  // Komutu çalıştır
         perror("execvp failed");
         exit(EXIT_FAILURE);
-    } else if (pid < 0) {
-        perror("fork failed");
+    } else if (pid > 0) {
+        // Ebeveyn işlem
+        waitpid(pid, NULL, 0);  // Çocuk işlemin bitmesini bekle
     } else {
-        // In parent process
-        waitpid(pid, NULL, 0);  // Wait for child process to finish
+        perror("fork failed");  // fork başarısız oldu
     }
 }
 
+// Verilen komutu arka planda çalıştırır
 void execute_in_background(char **args) {
     pid_t pid = fork();
 
     if (pid == 0) {
-        // In child process
-        execvp(args[0], args);
+        execvp(args[0], args);  // Çocuk işlemde komutu çalıştır
         perror("execvp failed");
         exit(EXIT_FAILURE);
-    } else if (pid < 0) {
-        perror("fork failed");
+    } else if (pid > 0) {
+        // Ebeveyn işlem
+        background_pids[background_count++] = pid;  // PID'yi kaydet
+        printf("Arka planda çalışan işlem başlatıldı, PID: %d\n", pid);
     } else {
-        // In parent process
-        background_pids[background_count++] = pid;
-        printf("Background process started with PID: %d\n", pid);
+        perror("fork failed");
     }
 }
 
+// Arka plandaki işlemleri kontrol eder ve tamamlananları raporlar
 void check_background_processes() {
     for (int i = 0; i < background_count; i++) {
-        pid_t pid = background_pids[i];
         int status;
-        pid_t result = waitpid(pid, &status, WNOHANG);
+        pid_t result = waitpid(background_pids[i], &status, WNOHANG);
 
-        if (result > 0) {
+        if (result > 0) {  // İşlem tamamlandı
             if (WIFEXITED(status)) {
-                int exit_code = WEXITSTATUS(status);
-                printf("[%d] retval: %d\n", pid, exit_code);
+                printf("[%d] retval: %d\n", background_pids[i], WEXITSTATUS(status));
             }
-            // Remove completed process from the list
+            // Tamamlanan işlemi listeden çıkar
             for (int j = i; j < background_count - 1; j++) {
                 background_pids[j] = background_pids[j + 1];
             }
             background_count--;
-            i--; // Adjust index to check the shifted process
+            i--;  // Liste güncellendiği için indeksi ayarla
         }
     }
 }
 
+// Tüm arka plan işlemlerinin bitmesini bekler
 void wait_for_background_processes() {
     for (int i = 0; i < background_count; i++) {
-        pid_t pid = background_pids[i];
         int status;
-        waitpid(pid, &status, 0);  // Wait for the background process to complete
+        waitpid(background_pids[i], &status, 0);
         if (WIFEXITED(status)) {
-            int exit_code = WEXITSTATUS(status);
-            printf("[%d] retval: %d\n", pid, exit_code);
+            printf("[%d] retval: %d\n", background_pids[i], WEXITSTATUS(status));
         }
     }
-    background_count = 0;  // Reset background count after waiting
+    background_count = 0;  // Sayacı sıfırla
 }
 
 int main() {
@@ -118,41 +109,41 @@ int main() {
     char *args[MAX_ARGS];
 
     while (1) {
-        printf("> ");
+        printf("> ");  // Komut istemi
         fflush(stdout);
 
         if (fgets(input, MAX_INPUT, stdin) == NULL) {
-            break;
+            break;  // EOF veya hata durumunda döngüyü bitir
         }
 
         if (input[0] == '\n') {
-            continue;
+            continue;  // Boş satır için bir şey yapma
         }
 
         parse_input(input, args);
 
-        if (strcmp(args[0], "quit") == 0) {
+        if (strcmp(args[0], "quit") == 0) {  // Çıkış komutu
             if (background_count > 0) {
-                printf("Waiting for background processes to complete...\n");
+                printf("Arka plandaki işlemler tamamlanıyor...\n");
                 wait_for_background_processes();
             }
-            break;  // Exit the shell
+            break;
         }
 
         int is_background = 0;
         for (int i = 0; args[i] != NULL; i++) {
-            if (strcmp(args[i], "&") == 0) {
-                args[i] = NULL;  // Remove the '&' from args
+            if (strcmp(args[i], "&") == 0) {  // Arka planda çalıştırma kontrolü
+                args[i] = NULL;  // '&' işaretini kaldır
                 is_background = 1;
                 break;
             }
         }
 
         if (is_background) {
-            execute_in_background(args);  // Start command in background
+            execute_in_background(args);
         } else {
-            check_background_processes(); // Check and report background processes
-            execute_command(args);  // Execute command normally
+            check_background_processes();  // Önce arka plandaki işlemleri kontrol et
+            execute_command(args);  // Komutu normal şekilde çalıştır
         }
     }
 
